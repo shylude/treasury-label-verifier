@@ -88,7 +88,8 @@ Stated precisely, because "it works" is cheap to claim:
 | Claude vision backend, Haiku 4.5 | 15/15 correct across 3 runs, slowest 3.35s, all inside budget |
 | Claude vision backend, Opus 5 | 5/5 correct, slowest 6.53s, 3 of 5 over budget |
 | Fast mode | **never run** — development account had a fast-mode limit of zero |
-| Docker image build | **never run** — no Docker on the development machine |
+| Docker image build | passes; the build-time OCR check reports tesseract 5.5.0 |
+| **Deployed service, live** | **10/10 correct across 2 runs, 2.09-3.29s, all inside budget** |
 
 The fallback row is the one worth reading twice: those five were not simulated failures.
 The API genuinely rejected the credential five times, and the application returned the
@@ -97,6 +98,24 @@ rather than asserted.
 
 Every figure here is on rendered labels, which are the easy case. None of it predicts
 accuracy or latency on a photographed bottle under bad lighting.
+
+### Deployment note: authenticate as a service account
+
+The deployed service uses an Anthropic **service account** key, not a personal one.
+Personal keys are identity-linked: the API rejects them with
+
+    400 anthropic-workspace-id is required when authenticating
+        with an identity-linked API key
+
+unless a workspace id accompanies every request — and an organization whose only
+workspace is the non-editable Default has no id to send. A service-account key belongs
+to the application rather than to a person, needs no such header, and keeps working if
+the person who created it leaves the organization. That is the right ownership model
+for a deployed service regardless, so it is worth doing deliberately rather than
+discovering it in production, as I did.
+
+The code still reads `ANTHROPIC_WORKSPACE_ID` and sends the header when it is set, for
+deployments that do use a personal key against a named workspace.
 
 ## Approach
 
