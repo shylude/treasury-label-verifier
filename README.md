@@ -71,16 +71,17 @@ Stated precisely, because "it works" is cheap to claim:
 | `POST /api/verify` with a real image | 200, correct verdict, 0.18s |
 | `POST /api/verify-batch`, 4 images + CSV | correct verdicts; unmatched CSV row reported, not dropped |
 | Fallback under a live API failure | 5/5 still correct via OCR after a real 401, 0.24-0.57s |
-| Claude vision backend returning 200 | **never run** |
+| Claude vision backend, Haiku 4.5 | 15/15 correct across 3 runs, slowest 3.35s, all inside budget |
+| Claude vision backend, Opus 5 | 5/5 correct, slowest 6.53s, 3 of 5 over budget |
+| Fast mode | **never run** — development account had a fast-mode limit of zero |
 
 The fallback row is the one worth reading twice: those five were not simulated failures.
 The API genuinely rejected the credential five times, and the application returned the
 right answer on every label anyway. That is Marcus's blocked-endpoint scenario, observed
 rather than asserted.
 
-Latency figures throughout are the local OCR path on rendered images. They are not a
-prediction of what a vision call costs on a photographed bottle, and should not be read
-as evidence that the 5-second budget is met on the Claude path.
+Every figure here is on rendered labels, which are the easy case. None of it predicts
+accuracy or latency on a photographed bottle under bad lighting.
 
 ## Approach
 
@@ -103,10 +104,10 @@ rule is unit-testable and an agent can be told exactly why something was rejecte
 
 Two backends:
 
-- **Claude (`claude-opus-5`)** — used when `ANTHROPIC_API_KEY` is set. Handles the
+- **Claude (`claude-haiku-4-5`)** — used when `ANTHROPIC_API_KEY` is set. Handles the
   angled, glared, and poorly-lit photographs Jenny described, which is where plain OCR
-  falls over. Run at `effort: "low"`, since transcription is not a reasoning task and
-  effort is the main latency lever available without changing models.
+  falls over. Images are downscaled to 1024px on the long edge first, since image
+  tokens dominate request latency.
 - **Tesseract** — local OCR, no outbound network. Used when no key is present, and
   automatically as a fallback if the API call fails.
 
@@ -115,12 +116,25 @@ ML endpoints and half their features died. A deployment behind that policy still
 returns results here, with reduced accuracy on difficult images, instead of returning
 nothing.
 
-**As shipped, this prototype runs on the OCR backend.** The Claude path is implemented
-and wired, but has never returned a successful response — I had no valid API key on the
-machine I built this on, so it is unexercised code. Set `ANTHROPIC_API_KEY` and it
-takes over automatically; until someone does, treat its accuracy claims as design
-intent rather than measured fact. That distinction is the honest one, and it is why the
-default deployment behaviour is the backend I could actually verify.
+#### Why Haiku and not a larger model
+
+Transcription is not a reasoning task, and Sarah's five seconds is a requirement rather
+than a preference. Measured on the five test labels, images downscaled, `effort: "low"`
+where the model accepts it:
+
+| Model | Correct | Range | Inside 5s |
+|---|---|---|---|
+| `claude-opus-5` | 5/5 | 4.0–6.5s | 2 of 5 |
+| `claude-haiku-4-5` | 5/5 | 1.8–3.5s | 5 of 5 |
+
+Equal accuracy, half the latency. Opus is the better model and loses anyway, because
+the constraint that decides adoption here is the clock. `LABEL_MODEL` swaps it back for
+anyone whose priorities differ.
+
+The honest limit on that table: the labels are clean and rendered. Glare, skew, and bad
+lighting are exactly where a larger model would be expected to separate, and I had no
+photographed artwork to test it on. The accuracy column says "tied on the easy cases",
+not "tied".
 
 ### The comparison rules
 
@@ -165,14 +179,18 @@ Every response carries `elapsed_seconds` and `within_latency_budget`, and the UI
 when a check ran long — the number is visible rather than buried, because a tool that
 quietly drifts past 5 seconds is a tool that gets abandoned again.
 
-If measured latency on real artwork sits above the budget, the lever is fast mode:
+**The budget is enforced, not hoped for.** Across 15 measured vision calls the median
+was ~2.7s, but the tail crossed 5s twice. So the API request carries a hard 4-second
+timeout and no retries, leaving roughly a second for the OCR fallback to finish inside
+the budget. A slow read degrades to a worse read; it never becomes a slow response.
+That is the specific failure that killed the last vendor pilot, and the one thing this
+prototype should be structurally incapable of repeating.
 
-```bash
-export LABEL_FAST_MODE=1
-```
+Tunable via `LABEL_VISION_TIMEOUT` if the trade-off should sit elsewhere.
 
-which runs the same model at up to 2.5× output speed for premium pricing. Left off by
-default so the prototype is cheap to run.
+Fast mode (`LABEL_FAST_MODE=1`) runs the same model at up to 2.5× output speed for
+premium pricing. It is implemented but was not usable during development — the
+development account had a fast-mode rate limit of zero — so it remains untested.
 
 ---
 
@@ -196,11 +214,11 @@ Stated plainly, since the brief asks for them:
    calibration against real rejected applications.
 7. **OCR fallback quality is materially worse** on skewed or glared images. That is the
    documented trade-off for working with no outbound network, not an oversight.
-8. **Not tested against real TTB artwork.** The synthetic labels above pass end to end
-   on the OCR backend in under 0.2s each, but they are the easy case. The extraction
-   prompt is written to transcribe rather than interpret; real-world accuracy on
-   photographed bottles is unmeasured, and the Claude backend has not been exercised
-   against a live API key.
+8. **Not tested against real TTB artwork.** Both backends pass all five synthetic
+   labels, but rendered text is the easy case. The extraction prompt is written to
+   transcribe rather than interpret; accuracy on photographed bottles — angles, glare,
+   curved surfaces — is unmeasured, and that is precisely where the model choice above
+   would deserve revisiting.
 
 ## What I'd do next
 

@@ -26,7 +26,12 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-MODEL = os.environ.get("LABEL_MODEL", "claude-opus-5")
+# Haiku 4.5 by default, not a larger model. Transcription is not a reasoning task, and
+# Sarah's 5-second ceiling is a hard requirement rather than a preference: measured on
+# the test labels, Opus 5 ran 4.0-6.5s (three of five over budget) while Haiku 4.5 ran
+# 2.0-3.2s at identical accuracy. Override with LABEL_MODEL when accuracy on difficult
+# artwork matters more than the clock.
+MODEL = os.environ.get("LABEL_MODEL", "claude-haiku-4-5")
 
 # Sarah's hard number: the previous vendor pilot died at 30-40s per label because
 # agents could eyeball five labels in that time. Anything past this is a failure.
@@ -41,6 +46,10 @@ USE_FAST_MODE = os.environ.get("LABEL_FAST_MODE", "").lower() in {"1", "true", "
 # time. 1024px on the long edge measured well against the 5s budget; raise it if
 # accuracy on small print suffers.
 MAX_IMAGE_EDGE = int(os.environ.get("LABEL_MAX_IMAGE_EDGE", "1024"))
+
+# Leaves roughly a second for the OCR fallback, so a timed-out vision call still
+# produces an answer within the 5s budget rather than blowing through it.
+VISION_TIMEOUT_SECONDS = float(os.environ.get("LABEL_VISION_TIMEOUT", "4.0"))
 
 EXTRACTION_PROMPT = """\
 You are reading a single alcohol beverage label for TTB compliance review.
@@ -124,9 +133,14 @@ def _extract_with_claude(image_bytes: bytes, filename: str) -> LabelText:
     # Identity-linked API keys are scoped to a workspace and the API rejects them with
     # a 400 unless the workspace id travels with the request.
     workspace_id = os.environ.get("ANTHROPIC_WORKSPACE_ID")
+    # The budget is enforced, not hoped for. Measured tail latency crosses 5s on a
+    # minority of calls, so the request is cut off with enough headroom left for the
+    # OCR fallback to finish inside the budget. A slow read degrades to a worse read;
+    # it never becomes a slow response, which is the failure that killed the last
+    # vendor pilot. No retries, for the same reason.
     client = anthropic.Anthropic(
-        timeout=LATENCY_BUDGET_SECONDS * 2,
-        max_retries=1,
+        timeout=VISION_TIMEOUT_SECONDS,
+        max_retries=0,
         default_headers={"anthropic-workspace-id": workspace_id} if workspace_id else None,
     )
     image_bytes, media_type = _downscale(image_bytes, filename)
