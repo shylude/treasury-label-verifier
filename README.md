@@ -44,6 +44,20 @@ python -m pytest tests/ -q
 
 19 tests cover the comparison rules. They need no API key and no network.
 
+### Test labels
+
+```bash
+PYTHONPATH=. python tools/make_test_labels.py test_labels
+```
+
+Renders five labels covering the interesting cases: compliant, warning in title case,
+warning absent, ABV disagreeing with the application, and a brand differing only by
+casing and apostrophe. All five have been run end to end through the OCR backend and
+produce the expected verdicts (match / mismatch / missing / mismatch / match).
+
+These are rendered, not photographed — clean, straight, evenly lit. They prove the
+pipeline; they say nothing about accuracy on a phone photo of a curved bottle.
+
 ---
 
 ## Approach
@@ -153,9 +167,11 @@ Stated plainly, since the brief asks for them:
    calibration against real rejected applications.
 7. **OCR fallback quality is materially worse** on skewed or glared images. That is the
    documented trade-off for working with no outbound network, not an oversight.
-8. **Not tested against real TTB artwork.** Test labels were synthesized; the extraction
-   prompt is written to transcribe rather than interpret, but real-world accuracy is
-   unmeasured.
+8. **Not tested against real TTB artwork.** The synthetic labels above pass end to end
+   on the OCR backend in under 0.2s each, but they are the easy case. The extraction
+   prompt is written to transcribe rather than interpret; real-world accuracy on
+   photographed bottles is unmeasured, and the Claude backend has not been exercised
+   against a live API key.
 
 ## What I'd do next
 
