@@ -1,0 +1,14 @@
+# Render Blueprint. Lets the service be created from the repo with its settings
+# already correct, rather than filled in by hand in the dashboard.
+services:
+  - type: web
+    name: label-check
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      # sync: false means Render prompts for the value and stores it as a secret.
+      # The key is never committed to this repo.
+      - key: ANTHROPIC_API_KEY
+        sync: false
