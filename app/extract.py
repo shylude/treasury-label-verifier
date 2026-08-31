@@ -36,6 +36,12 @@ LATENCY_BUDGET_SECONDS = 5.0
 # the demo is cheap to run; the README explains when to turn it on.
 USE_FAST_MODE = os.environ.get("LABEL_FAST_MODE", "").lower() in {"1", "true", "yes"}
 
+# Image tokens dominate the request, and they dominate latency with it. Label text is
+# large relative to the artwork, so downscaling costs little accuracy and buys a lot of
+# time. 1024px on the long edge measured well against the 5s budget; raise it if
+# accuracy on small print suffers.
+MAX_IMAGE_EDGE = int(os.environ.get("LABEL_MAX_IMAGE_EDGE", "1024"))
+
 EXTRACTION_PROMPT = """\
 You are reading a single alcohol beverage label for TTB compliance review.
 
@@ -80,29 +86,72 @@ def _media_type(filename: str) -> str:
     return {".png": "image/png", ".webp": "image/webp", ".gif": "image/gif"}.get(ext, "image/jpeg")
 
 
+def _supports_effort(model: str) -> bool:
+    """Whether this model accepts output_config.effort. Haiku and Sonnet 4.5 do not."""
+    return not (model.startswith("claude-haiku") or model.startswith("claude-sonnet-4-5"))
+
+
+def _downscale(image_bytes: bytes, filename: str) -> tuple[bytes, str]:
+    """Shrink an oversized label before sending it, returning bytes and media type.
+
+    Returns the original untouched if it is already small enough or if Pillow cannot
+    read it - a failure to optimize should never be a failure to review.
+    """
+    import io
+
+    try:
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(image_bytes))
+        if max(image.size) <= MAX_IMAGE_EDGE:
+            return image_bytes, _media_type(filename)
+
+        ratio = MAX_IMAGE_EDGE / max(image.size)
+        resized = image.convert("RGB").resize(
+            (max(1, round(image.width * ratio)), max(1, round(image.height * ratio))),
+            Image.LANCZOS,
+        )
+        buffer = io.BytesIO()
+        resized.save(buffer, format="JPEG", quality=90)
+        return buffer.getvalue(), "image/jpeg"
+    except Exception:  # noqa: BLE001 - optimization is best effort
+        return image_bytes, _media_type(filename)
+
+
 def _extract_with_claude(image_bytes: bytes, filename: str) -> LabelText:
     import anthropic
 
-    client = anthropic.Anthropic(timeout=LATENCY_BUDGET_SECONDS * 2, max_retries=1)
+    # Identity-linked API keys are scoped to a workspace and the API rejects them with
+    # a 400 unless the workspace id travels with the request.
+    workspace_id = os.environ.get("ANTHROPIC_WORKSPACE_ID")
+    client = anthropic.Anthropic(
+        timeout=LATENCY_BUDGET_SECONDS * 2,
+        max_retries=1,
+        default_headers={"anthropic-workspace-id": workspace_id} if workspace_id else None,
+    )
+    image_bytes, media_type = _downscale(image_bytes, filename)
     encoded = base64.standard_b64encode(image_bytes).decode("utf-8")
 
     request = {
         "model": MODEL,
         "max_tokens": 2048,
-        # Transcription is not a reasoning-heavy task, and effort is the main lever
-        # we have on latency without changing models.
-        "output_config": {"effort": "low"},
         "messages": [{
             "role": "user",
             "content": [
                 {"type": "image", "source": {"type": "base64",
-                                             "media_type": _media_type(filename),
+                                             "media_type": media_type,
                                              "data": encoded}},
                 {"type": "text", "text": EXTRACTION_PROMPT},
             ],
         }],
         "output_format": LabelText,
     }
+
+    # Transcription is not a reasoning-heavy task, so effort is the main latency lever
+    # available without changing models - but the smaller models reject the parameter
+    # outright, so it only travels when the target model accepts it.
+    if _supports_effort(MODEL):
+        request["output_config"] = {"effort": "low"}
 
     if USE_FAST_MODE:
         response = client.beta.messages.parse(
