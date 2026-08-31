@@ -60,6 +60,28 @@ pipeline; they say nothing about accuracy on a phone photo of a curved bottle.
 
 ---
 
+## What has actually been run
+
+Stated precisely, because "it works" is cheap to claim:
+
+| Check | Result |
+|---|---|
+| Unit tests over the comparison rules | 19/19 pass |
+| Five test labels, end to end, OCR backend | 5/5 correct verdicts, slowest 0.19s |
+| `POST /api/verify` with a real image | 200, correct verdict, 0.18s |
+| `POST /api/verify-batch`, 4 images + CSV | correct verdicts; unmatched CSV row reported, not dropped |
+| Fallback under a live API failure | 5/5 still correct via OCR after a real 401, 0.24-0.57s |
+| Claude vision backend returning 200 | **never run** |
+
+The fallback row is the one worth reading twice: those five were not simulated failures.
+The API genuinely rejected the credential five times, and the application returned the
+right answer on every label anyway. That is Marcus's blocked-endpoint scenario, observed
+rather than asserted.
+
+Latency figures throughout are the local OCR path on rendered images. They are not a
+prediction of what a vision call costs on a photographed bottle, and should not be read
+as evidence that the 5-second budget is met on the Claude path.
+
 ## Approach
 
 The interview notes describe a job that is mostly **comparison**, not analysis: an agent
@@ -92,6 +114,13 @@ The fallback is not decoration. Marcus said the firewall blocked the previous ve
 ML endpoints and half their features died. A deployment behind that policy still
 returns results here, with reduced accuracy on difficult images, instead of returning
 nothing.
+
+**As shipped, this prototype runs on the OCR backend.** The Claude path is implemented
+and wired, but has never returned a successful response — I had no valid API key on the
+machine I built this on, so it is unexercised code. Set `ANTHROPIC_API_KEY` and it
+takes over automatically; until someone does, treat its accuracy claims as design
+intent rather than measured fact. That distinction is the honest one, and it is why the
+default deployment behaviour is the backend I could actually verify.
 
 ### The comparison rules
 
