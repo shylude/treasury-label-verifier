@@ -36,6 +36,20 @@ uvicorn app.main:app --reload
 
 Open <http://127.0.0.1:8000>.
 
+### Docker
+
+The app shells out to the `tesseract` binary, so a plain Python buildpack will install
+the Python packages and then fail at request time. Use the image:
+
+```bash
+docker build -t label-check .
+docker run --rm -p 8000:8000 -e ANTHROPIC_API_KEY=sk-ant-... label-check
+```
+
+Omit the key and it runs on OCR alone. The build runs `pytesseract.get_tesseract_version()`
+as its last step, so a missing or misinstalled OCR binary fails the build rather than
+the first request.
+
 ## Test
 
 ```bash
@@ -74,6 +88,7 @@ Stated precisely, because "it works" is cheap to claim:
 | Claude vision backend, Haiku 4.5 | 15/15 correct across 3 runs, slowest 3.35s, all inside budget |
 | Claude vision backend, Opus 5 | 5/5 correct, slowest 6.53s, 3 of 5 over budget |
 | Fast mode | **never run** — development account had a fast-mode limit of zero |
+| Docker image build | **never run** — no Docker on the development machine |
 
 The fallback row is the one worth reading twice: those five were not simulated failures.
 The API genuinely rejected the credential five times, and the application returned the
