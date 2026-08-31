@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Label Check</title>
+<style>
+  /* Type is large and fixed-scale on purpose: half the review team is over 50, and
+     the stated benchmark for "obvious" was a 73-year-old first-time user. */
+  :root {
+    --ink: #1b1b1b;
+    --muted: #4a4a4a;
+    --line: #c9c9c9;
+    --pass: #1a7f37;
+    --review: #8a6100;
+    --fail: #b42318;
+    --focus: #0b5cad;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.5rem 4rem;
+    font: 20px/1.6 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink); background: #fff;
+  }
+  main { max-width: 44rem; margin: 0 auto; }
+  h1 { font-size: 2.25rem; margin: 0 0 .25rem; }
+  .sub { color: var(--muted); margin: 0 0 2rem; }
+  fieldset { border: 2px solid var(--line); border-radius: 10px; padding: 1.5rem; margin: 0 0 1.5rem; }
+  legend { font-size: 1.35rem; font-weight: 700; padding: 0 .5rem; }
+  label { display: block; font-weight: 600; margin: 1.25rem 0 .4rem; }
+  label:first-of-type { margin-top: 0; }
+  input[type=text], input[type=file] {
+    width: 100%; padding: .85rem; font-size: 1.05rem;
+    border: 2px solid var(--line); border-radius: 8px; background: #fff;
+  }
+  input:focus-visible, button:focus-visible {
+    outline: 4px solid var(--focus); outline-offset: 2px;
+  }
+  button {
+    font-size: 1.25rem; font-weight: 700; padding: 1rem 2rem;
+    border: 0; border-radius: 8px; background: var(--focus); color: #fff; cursor: pointer;
+  }
+  button:hover { background: #094a8c; }
+  button[disabled] { background: var(--muted); cursor: progress; }
+  .banner {
+    font-size: 1.6rem; font-weight: 700; padding: 1.25rem 1.5rem;
+    border-radius: 10px; border-left: 10px solid; margin: 0 0 1.5rem;
+  }
+  .banner.pass { border-color: var(--pass); background: #eaf6ec; color: var(--pass); }
+  .banner.review { border-color: var(--review); background: #fdf4e3; color: var(--review); }
+  .banner.fail { border-color: var(--fail); background: #fdeceb; color: var(--fail); }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  caption { text-align: left; font-weight: 700; font-size: 1.2rem; padding-bottom: .5rem; }
+  th, td { text-align: left; padding: .85rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .95rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .tag { font-weight: 700; white-space: nowrap; }
+  .tag.match { color: var(--pass); }
+  .tag.review { color: var(--review); }
+  .tag.mismatch, .tag.missing { color: var(--fail); }
+  .note { color: var(--muted); font-size: .95rem; }
+  .timing { color: var(--muted); font-size: .95rem; margin-top: 1rem; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Label Check</h1>
+  <p class="sub">Compare a label image against the application. One label at a time.</p>
+
+  <form id="form">
+    <fieldset>
+      <legend>1. The application says</legend>
+      <label for="brand">Brand name</label>
+      <input type="text" id="brand" name="brand_name" required autocomplete="off" placeholder="OLD TOM DISTILLERY">
+
+      <label for="abv">Alcohol content</label>
+      <input type="text" id="abv" name="alcohol_content" required autocomplete="off" placeholder="45% Alc./Vol.">
+
+      <label for="net">Net contents <span class="note">(optional)</span></label>
+      <input type="text" id="net" name="net_contents" autocomplete="off" placeholder="750 mL">
+    </fieldset>
+
+    <fieldset>
+      <legend>2. The label image</legend>
+      <label for="label">Choose a picture of the label</label>
+      <input type="file" id="label" name="label" accept="image/*" required>
+    </fieldset>
+
+    <button type="submit" id="submit">Check this label</button>
+  </form>
+
+  <section id="results" class="hidden" aria-live="polite">
+    <div id="banner" class="banner"></div>
+    <table>
+      <caption>What was checked</caption>
+      <thead>
+        <tr><th scope="col">Item</th><th scope="col">Result</th><th scope="col">Application</th><th scope="col">Label</th></tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p class="timing" id="timing"></p>
+  </section>
+</main>
+
+<script>
+  const LABELS = {
+    brand_name: "Brand name",
+    alcohol_content: "Alcohol content",
+    net_contents: "Net contents",
+    government_warning: "Government warning",
+  };
+  const BANNERS = {
+    match:    ["pass",   "Everything matches."],
+    review:   ["review", "Close - please take a look."],
+    mismatch: ["fail",   "Does not match. Reject or request a new label."],
+    missing:  ["fail",   "Something required is missing from the label."],
+  };
+
+  const form = document.getElementById("form");
+  const submit = document.getElementById("submit");
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    submit.disabled = true;
+    submit.textContent = "Checking...";
+
+    try {
+      const response = await fetch("/api/verify", { method: "POST", body: new FormData(form) });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(detail.detail || `Server returned ${response.status}`);
+      }
+      render(await response.json());
+    } catch (error) {
+      showBanner("fail", "Could not check this label: " + error.message);
+      document.getElementById("rows").innerHTML = "";
+      document.getElementById("timing").textContent = "";
+      document.getElementById("results").classList.remove("hidden");
+    } finally {
+      submit.disabled = false;
+      submit.textContent = "Check this label";
+    }
+  });
+
+  function showBanner(kind, text) {
+    const banner = document.getElementById("banner");
+    banner.className = "banner " + kind;
+    banner.textContent = text;
+  }
+
+  function render(result) {
+    const [kind, message] = BANNERS[result.status] || ["fail", "Unable to determine a result."];
+    showBanner(kind, message);
+
+    document.getElementById("rows").innerHTML = result.fields.map((field) => `
+      <tr>
+        <th scope="row">${LABELS[field.field] || field.field}</th>
+        <td class="tag ${field.status}">${field.status}${field.note ? `<div class="note">${escapeHtml(field.note)}</div>` : ""}</td>
+        <td>${escapeHtml(field.expected)}</td>
+        <td>${escapeHtml(field.found)}</td>
+      </tr>`).join("");
+
+    const slow = result.within_latency_budget ? "" : " - slower than the 5 second target";
+    const unreadable = result.legible ? "" : " The image was hard to read; consider requesting a clearer photo.";
+    document.getElementById("timing").textContent =
+      `Checked in ${result.elapsed_seconds} seconds${slow}.${unreadable}`;
+    document.getElementById("results").classList.remove("hidden");
+  }
+
+  function escapeHtml(value) {
+    if (value === null || value === undefined || value === "") return "—";
+    const text = String(value);
+    return text.length > 240 ? escape(text.slice(0, 240)) + "..." : escape(text);
+    function escape(s) {
+      return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+  }
+</script>
+</body>
+</html>
